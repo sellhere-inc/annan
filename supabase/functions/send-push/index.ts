@@ -14,7 +14,10 @@ const db = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SE
 
 async function notify(userIds: string[], payload: { title: string; body: string; url?: string; tag?: string }) {
   if (!userIds.length) return
-  const { data: subs } = await db.from('push_subscriptions').select('*').in('user_id', userIds)
+  const { data: subs, error } = await db.from('push_subscriptions').select('*').in('user_id', userIds)
+  if (error) throw error
+  if (!subs?.length) console.warn('No push subscriptions for recipients', { count: userIds.length })
+  let failed = 0
   await Promise.all((subs || []).map(async s => {
     try {
       await webpush.sendNotification(
@@ -23,18 +26,22 @@ async function notify(userIds: string[], payload: { title: string; body: string;
         { TTL: 60 * 60 * 24 }
       )
     } catch (e: any) {
+      failed++
+      console.error('Push delivery failed', { statusCode: e?.statusCode, message: e?.message })
       // Subscription expired or revoked: remove it
       if (e?.statusCode === 404 || e?.statusCode === 410) {
         await db.from('push_subscriptions').delete().eq('endpoint', s.endpoint)
       }
     }
   }))
+  if (failed) throw new Error(`${failed} push delivery attempt(s) failed; check function logs.`)
 }
 
 Deno.serve(async req => {
-  if (req.headers.get('x-webhook-secret') !== Deno.env.get('WEBHOOK_SECRET')) {
+  if (!Deno.env.get('WEBHOOK_SECRET') || req.headers.get('x-webhook-secret') !== Deno.env.get('WEBHOOK_SECRET')) {
     return new Response('Unauthorized', { status: 401 })
   }
+  try {
   const { type, table, record, old_record } = await req.json()
 
   if (table === 'violations' && type === 'INSERT') {
@@ -54,7 +61,8 @@ Deno.serve(async req => {
       })
     }
     if (old_record?.status !== 'pending' && record.status === 'pending') {
-      const { data: admins } = await db.from('profiles').select('id').eq('role', 'admin')
+      const { data: admins, error }  = await db.from('profiles').select('id').eq('role', 'admin')
+      if (error) throw error
       await notify((admins || []).map(a => a.id), {
         title: 'New approval request',
         body: `${record.name || record.email || 'Someone'} submitted a payment.`,
@@ -64,4 +72,8 @@ Deno.serve(async req => {
   }
 
   return new Response('ok')
+  } catch (error) {
+    console.error('Notification webhook failed', error)
+    return new Response('Notification delivery failed; check function logs.', { status: 500 })
+  }
 })

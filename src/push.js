@@ -39,7 +39,8 @@ export async function pushStatus() {
 export async function enablePush(userId) {
   const permission = await Notification.requestPermission()
   if (permission !== 'granted') throw new Error('Notification permission was not granted.')
-  await registerSW()
+  if (!userId || !VAPID_PUBLIC) throw new Error('Notification setup is unavailable.')
+  if (!(await registerSW())) throw new Error('Could not register the notification service worker.')
   const reg = await navigator.serviceWorker.ready
   let sub = await reg.pushManager.getSubscription()
   if (!sub) {
@@ -66,15 +67,14 @@ export async function disablePush() {
 
 // Re-sync an existing subscription to the logged-in user (e.g. after login on same browser).
 export async function syncSubscription(userId) {
-  if (!('serviceWorker' in navigator) || Notification?.permission !== 'granted' || !VAPID_PUBLIC) return
-  try {
-    const reg = (await navigator.serviceWorker.getRegistration()) || (await registerSW())
-    const sub = await reg?.pushManager.getSubscription()
-    if (!sub) return
-    const j = sub.toJSON()
-    await supabase.from('push_subscriptions').upsert(
-      { user_id: userId, endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, user_agent: navigator.userAgent },
-      { onConflict: 'endpoint' }
-    )
-  } catch {}
+  if (!('serviceWorker' in navigator) || !('Notification' in window) || Notification.permission !== 'granted' || !VAPID_PUBLIC) return
+  const reg = await navigator.serviceWorker.ready
+  const sub = await reg.pushManager.getSubscription()
+  if (!sub) throw new Error('Notification subscription is missing.')
+  const j = sub.toJSON()
+  const { error } = await supabase.from('push_subscriptions').upsert(
+    { user_id: userId, endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, user_agent: navigator.userAgent },
+    { onConflict: 'endpoint' }
+  )
+  if (error) throw error
 }

@@ -1,5 +1,6 @@
 import { supabase } from './supabase.js'
 import './style.css'
+import { registerSW, pushStatus, enablePush, syncSubscription } from './push.js'
 import * as A from './art.js'
 
 const app = document.querySelector('#root')
@@ -7,6 +8,8 @@ const PRICE = '1.99'
 const GPAY_ID = import.meta.env.VITE_GPAY_ID || ''
 const $ = s => document.querySelector(s)
 
+let checkingNotifications = false
+let enablingNotifications = false
 let state = { error: '', session: null, profile: null, people: [], requests: [], authMode: 'login' }
 
 const esc = (v = '') =>
@@ -18,7 +21,7 @@ const layout = c => `
     <div class="brand">annan<span>pro</span></div>
     ${state.session ? `<button data-logout class="nav-link">Log out</button>` : ''}
   </header>
-  <main>${state.error ? `<div class="banner">Couldn't load data: ${esc(state.error)}</div>` : ''}${c}</main>`
+  <main><div id="notification-banner"></div>${state.error ? `<div class="banner">Couldn't load data: ${esc(state.error)}</div>` : ''}${c}</main>`
 
 const head = (tag, h, sub, role, art) => `
   <section class="board-head">
@@ -219,7 +222,10 @@ async function render() {
 }
 
 // Bug fix: bind every logout button (header + page), not just the first
-const bindLogout = () => document.querySelectorAll('[data-logout]').forEach(b => (b.onclick = logout))
+const bindLogout = () => {
+  document.querySelectorAll('[data-logout]').forEach(b => (b.onclick = logout))
+  refreshNotifications()
+}
 
 function bindAuth() {
   $('#show-login').onclick = () => { state.authMode = 'login'; render() }
@@ -299,3 +305,53 @@ supabase.auth.onAuthStateChange((_event, session) => { state.session = session; 
 const { data } = await supabase.auth.getSession()
 state.session = data.session
 render()
+
+// Update only the banner so permission changes never erase an in-progress form.
+async function refreshNotifications() {
+  if (!state.session || checkingNotifications || enablingNotifications) return
+  checkingNotifications = true
+  const userId = state.session.user.id
+  let status, error = ''
+  try {
+    status = await pushStatus()
+    if (status === 'on') await syncSubscription(userId)
+  } catch (e) { status = 'off'; error = `Could not save notification settings: ${e.message || 'Please try again.'}`; console.error(e) }
+  finally { checkingNotifications = false }
+  if (state.session?.user.id !== userId) return
+  showNotificationBanner(status, error)
+}
+
+function showNotificationBanner(status, error = '') {
+  const host = $('#notification-banner')
+  if (!host) return
+  if (status === 'on') { host.innerHTML = ''; return }
+  const messages = {
+    off: 'Enable notifications to receive account updates and violations.',
+    blocked: 'Notifications are blocked. Allow notifications in your browser’s site settings, then check again.',
+    'needs-install': 'On iPhone or iPad, add this app to your Home Screen, open it there, then enable notifications.',
+    unsupported: 'Open this app in a browser that supports notifications over HTTPS.',
+    'no-key': 'Notifications are not available yet. Please contact the administrator.'
+  }
+  host.innerHTML = `<aside class="notification-banner" aria-label="Notifications"><div><strong>Stay updated</strong><p>${esc(messages[status] || messages.off)}</p>${error ? `<p role="alert">${esc(error)}</p>` : ''}</div><button class="secondary" id="enable-notifications">${status === 'off' ? 'Enable notifications' : 'Check again'}</button></aside>`
+  $('#enable-notifications').onclick = async () => {
+    if (status !== 'off') { await refreshNotifications(); return }
+    enablingNotifications = true
+    const userId = state.session?.user.id
+    const button = $('#enable-notifications')
+    button.disabled = true
+    button.textContent = 'Enabling…'
+    try {
+      await enablePush(userId)
+      if (state.session?.user.id === userId) showNotificationBanner('on')
+    } catch (e) {
+      console.error('Notification setup failed', e)
+      if (state.session?.user.id === userId) showNotificationBanner(await pushStatus() === 'blocked' ? 'blocked' : 'off', `Notifications could not be enabled: ${e.message || 'Please try again.'}`)
+    } finally { enablingNotifications = false }
+  }
+}
+
+registerSW()
+window.addEventListener('focus', refreshNotifications)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') refreshNotifications()
+})
