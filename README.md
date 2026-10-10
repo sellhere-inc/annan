@@ -59,7 +59,7 @@ The frontend must be served over HTTPS (localhost also works).
 6. Sign in on each receiving device and use the persistent Enable notifications
    banner. On iOS, install to the Home Screen and open the installed app first.
 
-A violation notifies the affected person; an approval notifies the approved user;
+A violation notifies all subscribed accounts (including admins and annans) and names the affected person; an approval notifies the approved user;
 submitting payment notifies admins. Each recipient needs their own saved subscription.
 The banner disappears only after browser permission and subscription storage succeed.
 

@@ -8,6 +8,9 @@ const PRICE = '1.99'
 const GPAY_ID = import.meta.env.VITE_GPAY_ID || ''
 const $ = s => document.querySelector(s)
 
+let paymentRevealTimer
+let paymentAttempt = null
+const paymentStorageKey = id => `annan-payment-opened:${id}`
 let checkingNotifications = false
 let enablingNotifications = false
 let state = { error: '', session: null, profile: null, people: [], requests: [], authMode: 'login' }
@@ -83,8 +86,7 @@ function paymentView() {
           <p class="payment-description">Pay using Google Pay or another UPI app.</p>
           ${GPAY_ID ? '' : `<div class="warning">Add <strong>VITE_GPAY_ID</strong> to your .env file.</div>`}
           <button id="pay" class="primary full">Pay ₹${PRICE}</button>
-          <button id="paid" class="secondary full">I've completed the payment</button>
-          <p class="payment-note">Payment is manually verified by the admin.</p>
+          <button id="paid" class="secondary full" hidden>I've completed the payment</button>
         </div>
       </div>
     </section>`)
@@ -257,13 +259,55 @@ function bindPayment() {
   bindLogout()
   $('#pay').onclick = openGPay
   $('#paid').onclick = submitPayment
+  schedulePaymentConfirmation()
 }
 
 function openGPay() {
   if (!GPAY_ID) { alert('Add VITE_GPAY_ID to your .env file first.'); return }
+  clearTimeout(paymentRevealTimer)
+  $('#paid').hidden = true
+  paymentAttempt = { userId: state.session.user.id, left: false, returned: false }
+  try { sessionStorage.setItem(paymentStorageKey(paymentAttempt.userId), '1') } catch {}
   window.location.href =
     `tez://upi/pay?pa=${encodeURIComponent(GPAY_ID)}&pn=${encodeURIComponent('Annan Pro')}&am=${PRICE}&cu=INR`
 }
+
+// Returning from the payment app (or reopening this tab) reveals confirmation.
+// Opening GPay is not proof of payment; confirmation still requires a user click.
+function schedulePaymentConfirmation() {
+  clearTimeout(paymentRevealTimer)
+  const userId = state.session?.user.id
+  const button = $('#paid')
+  if (!userId || !button || document.visibilityState !== 'visible') return
+  let previouslyOpened = false
+  try { previouslyOpened = sessionStorage.getItem(paymentStorageKey(userId)) === '1' } catch {}
+  const currentAttempt = paymentAttempt?.userId === userId
+  if (currentAttempt ? !paymentAttempt.returned : !previouslyOpened) return
+  paymentRevealTimer = setTimeout(() => {
+    if (state.session?.user.id === userId && document.visibilityState === 'visible' && $('#paid') === button) {
+      button.hidden = false
+    }
+  }, 3000)
+}
+
+function paymentPageLeft() {
+  clearTimeout(paymentRevealTimer)
+  if (paymentAttempt) paymentAttempt.left = true
+}
+
+function paymentPageReturned() {
+  if (paymentAttempt?.left) paymentAttempt.returned = true
+  schedulePaymentConfirmation()
+}
+
+window.addEventListener('blur', paymentPageLeft)
+window.addEventListener('pagehide', paymentPageLeft)
+window.addEventListener('focus', paymentPageReturned)
+window.addEventListener('pageshow', paymentPageReturned)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') paymentPageLeft()
+  else paymentPageReturned()
+})
 
 async function submitPayment() {
   await supabase.from('profiles').update({ payment_status: 'submitted', status: 'pending' }).eq('id', state.session.user.id)

@@ -12,11 +12,14 @@ webpush.setVapidDetails(
 
 const db = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 
-async function notify(userIds: string[], payload: { title: string; body: string; url?: string; tag?: string }) {
-  if (!userIds.length) return
-  const { data: subs, error } = await db.from('push_subscriptions').select('*').in('user_id', userIds)
+// null broadcasts to every subscribed account, including admins and annans.
+async function notify(userIds: string[] | null, payload: { title: string; body: string; url?: string; tag?: string }) {
+  if (userIds && !userIds.length) return
+  let query = db.from('push_subscriptions').select('*')
+  if (userIds) query = query.in('user_id', userIds)
+  const { data: subs, error } = await query
   if (error) throw error
-  if (!subs?.length) console.warn('No push subscriptions for recipients', { count: userIds.length })
+  if (!subs?.length) console.warn('No push subscriptions for recipients', { count: userIds?.length ?? 'all' })
   let failed = 0
   await Promise.all((subs || []).map(async s => {
     try {
@@ -45,10 +48,12 @@ Deno.serve(async req => {
   const { type, table, record, old_record } = await req.json()
 
   if (table === 'violations' && type === 'INSERT') {
-    await notify([record.person_id], {
-      title: 'New violation added',
+    const { data: person, error } = await db.from('profiles').select('name').eq('id', record.person_id).single()
+    if (error) throw error
+    await notify(null, {
+      title: `annan problems - ${person?.name || 'Someone'}`,
       body: record.reason,
-      tag: 'violation'
+      tag: `violation-${record.id}`
     })
   }
 
