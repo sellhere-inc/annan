@@ -4,20 +4,21 @@ Minimal Vite + Supabase one-page frontend.
 
 ## Flow
 
-1. Sign in or create an account.
-2. New account is created in `profiles` with `status = payment`.
-3. Frontend shows a ₹4.99 Google Pay-style demo screen.
-4. Clicking "I've completed payment" changes the account to `pending`.
-5. Admin sees pending requests and can approve them.
-6. Approved users can view the people list.
-7. `admin` and `annan` can add violations.
-8. `admin` and `annan` can remove violations one by one.
-9. People are sorted by violation count, highest first.
-10. `OFF` means violation count > 0; `ON` means zero.
+1. Sign in or create an account. New accounts are approved automatically.
+2. Signed-in users go directly to their role's board, without payment or admin approval.
+3. Admins and annans can remove violations; annans can add violations.
+4. People are sorted by violation count, highest first.
+5. `OFF` means violation count > 0; `ON` means zero.
 
 ## Supabase
 
 Run `supabase/migrations/001_annan_pro.sql` in the Supabase SQL editor.
+
+For an existing database, run `supabase/migrations/003_auto_approve_accounts.sql`.
+This approves existing payment/pending accounts, updates the signup trigger and default,
+and removes the old named account-notification triggers. Remove any additional custom
+profile approval webhooks in Integrations → Webhooks as well. Auth email confirmation,
+if enabled in Supabase, still applies.
 
 Create the first Auth user, then run:
 
@@ -38,8 +39,6 @@ Deploy as a Vite app. Add:
 VITE_SUPABASE_URL
 VITE_SUPABASE_ANON_KEY
 
-Important: the Google Pay screen is intentionally frontend-only as requested. It does not verify a real payment. Replace it with a real payment gateway before accepting actual money.
-
 ## Push notifications
 
 The frontend must be served over HTTPS (localhost also works).
@@ -52,15 +51,14 @@ The frontend must be served over HTTPS (localhost also works).
    `WEBHOOK_SECRET`.
 4. Deploy with `supabase functions deploy send-push --no-verify-jwt`.
    The function authenticates database webhooks using `x-webhook-secret`.
-5. In Supabase Database Webhooks, configure POST webhooks for INSERT on
-   `public.violations` and UPDATE on `public.profiles`, targeting
+5. In Supabase Integrations → Webhooks, configure a POST webhook for INSERT on
+   `public.violations`, targeting
    `https://<project-ref>.supabase.co/functions/v1/send-push`. Add the header
    `x-webhook-secret` with the matching secret and `Content-Type: application/json`.
 6. Sign in on each receiving device and use the persistent Enable notifications
    banner. On iOS, install to the Home Screen and open the installed app first.
 
-A violation notifies all subscribed accounts (including admins and annans) and names the affected person; an approval notifies the approved user;
-submitting payment notifies admins. Each recipient needs their own saved subscription.
+A violation notifies all subscribed accounts (including admins and annans) and names the affected person. Each recipient needs their own saved subscription.
 The banner disappears only after browser permission and subscription storage succeed.
 
 If delivery fails, check Database Webhook responses and Edge Function logs. Missing

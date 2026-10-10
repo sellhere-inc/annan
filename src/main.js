@@ -4,16 +4,11 @@ import { registerSW, pushStatus, enablePush, syncSubscription } from './push.js'
 import * as A from './art.js'
 
 const app = document.querySelector('#root')
-const PRICE = '1.99'
-const GPAY_ID = import.meta.env.VITE_GPAY_ID || ''
 const $ = s => document.querySelector(s)
 
-let paymentRevealTimer
-let paymentAttempt = null
-const paymentStorageKey = id => `annan-payment-opened:${id}`
 let checkingNotifications = false
 let enablingNotifications = false
-let state = { error: '', session: null, profile: null, people: [], requests: [], authMode: 'login' }
+let state = { error: '', session: null, profile: null, people: [], authMode: 'login' }
 
 const esc = (v = '') =>
   String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c]))
@@ -50,7 +45,7 @@ function authView() {
         <div class="art">${A.annan()}</div>
         <p class="tag">${login ? 'Welcome back' : 'Get started'}</p>
         <h1>${login ? 'Sign in.' : 'Create account.'}</h1>
-        <p>${login ? 'Sign in to continue to your Annan Pro board.' : 'Create your account to request access.'}</p>
+        <p>${login ? 'Sign in to continue to your Annan Pro board.' : 'Create your account to get started.'}</p>
       </div>
       <div class="auth-card">
         <div class="auth-switch">
@@ -68,45 +63,8 @@ function authView() {
     </section>`)
 }
 
-function paymentView() {
-  return layout(`
-    <section class="payment-page">
-      <div class="payment-copy">
-        <div class="art">${A.payment()}</div>
-        <h1>One small step.</h1>
-        <p>Complete the ₹${PRICE} payment and submit your account for approval.</p>
-      </div>
-      <div class="payment-card">
-        <div class="payment-header">
-          <div><span class="muted-label">Total</span><strong>₹${PRICE}</strong></div>
-          <div class="payment-badge">UPI</div>
-        </div>
-        <div class="gpay-box">
-          <div class="gpay-logo">${A.gpayG()}<span>Google Pay</span></div>
-          <p class="payment-description">Pay using Google Pay or another UPI app.</p>
-          ${GPAY_ID ? '' : `<div class="warning">Add <strong>VITE_GPAY_ID</strong> to your .env file.</div>`}
-          <button id="pay" class="primary full">Pay ₹${PRICE}</button>
-          <button id="paid" class="secondary full" hidden>I've completed the payment</button>
-        </div>
-      </div>
-    </section>`)
-}
-
-function pendingView() {
-  return layout(`
-    <section class="state-page">
-      <div class="state-card">
-        <div class="art">${A.waiting()}</div>
-        <p class="tag">Request submitted</p>
-        <h1>You're all set.</h1>
-        <p>Your payment has been submitted. Your account will become available once an admin approves it.</p>
-        <button data-logout class="secondary">Log out</button>
-      </div>
-    </section>`)
-}
-
 function peopleMarkup(canEdit) {
-  if (!state.people.length) return empty('No people yet', 'People will appear here once they are approved.')
+  if (!state.people.length) return empty('No people yet', 'People will appear here when they join.')
   return state.people.map(p => {
     const n = p.violations.length, off = n > 0
     return `
@@ -153,20 +111,9 @@ const annanBoard = () => layout(`
   </section>`)
 
 const adminBoard = () => layout(`
-  ${head('Admin board', 'Control.', 'Approve accounts and manage people.', 'Admin', A.requests())}
+  ${head('Admin board', 'Control.', 'Manage people and violations.', 'Admin', A.requests())}
   <section class="board-content">
-    ${title('Access', 'Approval requests', state.requests.length)}
-    <div class="requests">
-      ${state.requests.length ? state.requests.map(r => `
-        <div class="request">
-          <div class="request-info">
-            <div class="avatar">${initial(r.name)}</div>
-            <div><strong>${esc(r.name)}</strong><span>${esc(r.email)}</span></div>
-          </div>
-          <button class="primary approve" data-id="${r.id}">Approve</button>
-        </div>`).join('') : empty('No pending requests', 'New account requests will appear here.')}
-    </div>
-    <div class="people-title">${title('People', 'All people', state.people.length)}</div>
+    ${title('People', 'All people', state.people.length)}
     <div class="people">${peopleMarkup(true)}</div>
   </section>`)
 
@@ -191,11 +138,7 @@ async function loadData() {
     .map(p => ({ ...p, name: p.name || p.email || 'Unnamed', violations: byPerson[p.id] || [] }))
     .sort((a, b) => b.violations.length - a.violations.length || a.name.localeCompare(b.name))
 
-  if (state.profile.role === 'admin') {
-    const { data: requests, error } = await supabase.from('profiles').select('id,name,email').eq('status', 'pending')
-    if (error) state.error = error.message
-    state.requests = requests || []
-  }
+
 }
 
 async function render() {
@@ -207,16 +150,6 @@ async function render() {
   state.profile = await getProfile(state.session.user.id)
   if (!state.profile) return supabase.auth.signOut()
 
-  if (state.profile.status === 'payment') {
-    app.innerHTML = paymentView()
-    bindPayment()
-    return
-  }
-  if (state.profile.status === 'pending' && state.profile.role !== 'admin') {
-    app.innerHTML = pendingView()
-    bindLogout()
-    return
-  }
   await loadData()
   const r = state.profile.role
   app.innerHTML = r === 'admin' ? adminBoard() : r === 'annan' ? annanBoard() : userBoard()
@@ -252,66 +185,7 @@ async function signup() {
   if (!name || !email || !password) { msg.textContent = 'Fill in all fields.'; return }
   if (password.length < 6) { msg.textContent = 'Password must be at least 6 characters.'; return }
   const { error } = await supabase.auth.signUp({ email, password, options: { data: { name } } })
-  msg.textContent = error ? error.message : 'Account created. Continue to payment.'
-}
-
-function bindPayment() {
-  bindLogout()
-  $('#pay').onclick = openGPay
-  $('#paid').onclick = submitPayment
-  schedulePaymentConfirmation()
-}
-
-function openGPay() {
-  if (!GPAY_ID) { alert('Add VITE_GPAY_ID to your .env file first.'); return }
-  clearTimeout(paymentRevealTimer)
-  $('#paid').hidden = true
-  paymentAttempt = { userId: state.session.user.id, left: false, returned: false }
-  try { sessionStorage.setItem(paymentStorageKey(paymentAttempt.userId), '1') } catch {}
-  window.location.href =
-    `tez://upi/pay?pa=${encodeURIComponent(GPAY_ID)}&pn=${encodeURIComponent('Annan Pro')}&am=${PRICE}&cu=INR`
-}
-
-// Returning from the payment app (or reopening this tab) reveals confirmation.
-// Opening GPay is not proof of payment; confirmation still requires a user click.
-function schedulePaymentConfirmation() {
-  clearTimeout(paymentRevealTimer)
-  const userId = state.session?.user.id
-  const button = $('#paid')
-  if (!userId || !button || document.visibilityState !== 'visible') return
-  let previouslyOpened = false
-  try { previouslyOpened = sessionStorage.getItem(paymentStorageKey(userId)) === '1' } catch {}
-  const currentAttempt = paymentAttempt?.userId === userId
-  if (currentAttempt ? !paymentAttempt.returned : !previouslyOpened) return
-  paymentRevealTimer = setTimeout(() => {
-    if (state.session?.user.id === userId && document.visibilityState === 'visible' && $('#paid') === button) {
-      button.hidden = false
-    }
-  }, 3000)
-}
-
-function paymentPageLeft() {
-  clearTimeout(paymentRevealTimer)
-  if (paymentAttempt) paymentAttempt.left = true
-}
-
-function paymentPageReturned() {
-  if (paymentAttempt?.left) paymentAttempt.returned = true
-  schedulePaymentConfirmation()
-}
-
-window.addEventListener('blur', paymentPageLeft)
-window.addEventListener('pagehide', paymentPageLeft)
-window.addEventListener('focus', paymentPageReturned)
-window.addEventListener('pageshow', paymentPageReturned)
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') paymentPageLeft()
-  else paymentPageReturned()
-})
-
-async function submitPayment() {
-  await supabase.from('profiles').update({ payment_status: 'submitted', status: 'pending' }).eq('id', state.session.user.id)
-  render()
+  msg.textContent = error ? error.message : 'Account created. Check your email if confirmation is required, then sign in.'
 }
 
 async function addViolation() {
@@ -330,16 +204,10 @@ async function removeViolation(id) {
   render()
 }
 
-async function approve(id) {
-  await supabase.from('profiles').update({ status: 'approved' }).eq('id', id)
-  render()
-}
-
 function bindBoard() {
   bindLogout()
   $('#add')?.addEventListener('click', addViolation)
   document.querySelectorAll('.remove').forEach(b => (b.onclick = () => removeViolation(b.dataset.id)))
-  document.querySelectorAll('.approve').forEach(b => (b.onclick = () => approve(b.dataset.id)))
 }
 
 async function logout() { await supabase.auth.signOut() }

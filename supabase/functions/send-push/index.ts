@@ -45,7 +45,7 @@ Deno.serve(async req => {
     return new Response('Unauthorized', { status: 401 })
   }
   try {
-  const { type, table, record, old_record } = await req.json()
+  const { type, table, record } = await req.json()
 
   if (table === 'violations' && type === 'INSERT') {
     const { data: person, error } = await db.from('profiles').select('name').eq('id', record.person_id).single()
@@ -55,25 +55,6 @@ Deno.serve(async req => {
       body: record.reason,
       tag: `violation-${record.id}`
     })
-  }
-
-  if (table === 'profiles' && type === 'UPDATE') {
-    if (old_record?.status !== 'approved' && record.status === 'approved') {
-      await notify([record.id], {
-        title: 'Account approved',
-        body: 'Your Annan Pro account is now active.',
-        tag: 'approved'
-      })
-    }
-    if (old_record?.status !== 'pending' && record.status === 'pending') {
-      const { data: admins, error }  = await db.from('profiles').select('id').eq('role', 'admin')
-      if (error) throw error
-      await notify((admins || []).map(a => a.id), {
-        title: 'New approval request',
-        body: `${record.name || record.email || 'Someone'} submitted a payment.`,
-        tag: 'request'
-      })
-    }
   }
 
   return new Response('ok')

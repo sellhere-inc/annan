@@ -8,7 +8,7 @@ create table public.profiles (
   name text not null,
   email text not null,
   role public.user_role not null default 'user',
-  status public.account_status not null default 'payment',
+  status public.account_status not null default 'approved',
   payment_status text not null default 'unpaid',
   created_at timestamptz not null default now()
 );
